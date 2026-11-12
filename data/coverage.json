@@ -1,0 +1,14 @@
+{
+  "Run UTC": "2026-11-12T10:58:57.266950+00:00",
+  "Mode": "import-json",
+  "Unique records in archive": 10,
+  "Records seen this run": 10,
+  "Pages processed": 1,
+  "API reported count": 1953,
+  "API reported pages": 196,
+  "Full pagination completed this run": false,
+  "Coverage complete": false,
+  "Errors": "None",
+  "Method": "Public metadata catalogue; no article full text; nid deduplication; ENUR relevance heuristic requires review",
+  "Note": "Update checks first 2 pages only; schedule periodic backfill to reconcile older/edited entries."
+}

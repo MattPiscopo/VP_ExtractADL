@@ -1,0 +1,39 @@
+name: Refresh ADL Insights archive
+on:
+  workflow_dispatch:
+    inputs:
+      full_backfill:
+        description: 'Revisit every page (true) or latest two pages (false)'
+        required: false
+        default: 'true'
+  schedule:
+    - cron: '15 6 * * 1'
+permissions:
+  contents: write
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+      - run: pip install -r requirements.txt
+      - name: Refresh public catalogue
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            python update.py --update --output-dir data
+          elif [ "${{ inputs.full_backfill }}" = "true" ]; then
+            python update.py --backfill --output-dir data
+          else
+            python update.py --update --output-dir data
+          fi
+      - name: Commit refreshed archive
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add data/ADL_Insights_Database.xlsx data/ADL_Insights_Database.csv data/coverage.json
+          git diff --cached --quiet || (git commit -m 'Refresh ADL Insights archive' && git push)
