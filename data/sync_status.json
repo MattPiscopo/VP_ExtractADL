@@ -1,15 +1,15 @@
 {
   "sync_log": {
-    "Run ID": "RUN-20261112-115837",
-    "Run timestamp": "2026-11-12T11:58:37.186153+00:00",
-    "Execution environment": "Local (Windows 11)",
-    "Execution mode": "update",
-    "Pages requested": 3,
-    "Pages successfully processed": 3,
-    "API-reported publication count": 1953,
-    "Records retrieved": 30,
+    "Run ID": "RUN-20261112-120301",
+    "Run timestamp": "2026-11-12T12:03:01.652986+00:00",
+    "Execution environment": "GitHub Actions",
+    "Execution mode": "validate",
+    "Pages requested": 0,
+    "Pages successfully processed": 0,
+    "API-reported publication count": "N/A",
+    "Records retrieved": 0,
     "Unique records": 30,
-    "New records": 20,
+    "New records": 0,
     "Updated records": 0,
     "Errors": "None",
     "Coverage status": "Partial / Incomplete",
@@ -17,10 +17,10 @@
   },
   "qa_metrics": {
     "Total unique publications": 30,
-    "API-reported publication count": 1953,
-    "API-reported pages": 196,
-    "Pages processed": 3,
-    "Discrepancy (Actual - Expected)": -1923,
+    "API-reported publication count": null,
+    "API-reported pages": null,
+    "Pages processed": 0,
+    "Discrepancy (Actual - Expected)": null,
     "Duplicate IDs": 0,
     "Missing titles": 0,
     "Missing publication dates": 0,
@@ -40,15 +40,15 @@
     "Errors": "None",
     "Publication Types Breakdown": {
       "Insights - Viewpoints": 23,
-      "Reports": 3,
-      "Blue Shift Report": 1,
+      "Insights - Reports": 2,
       "Insights - Hubspot": 1,
-      "Insights - Reports": 2
+      "Reports": 3,
+      "Blue Shift Report": 1
     },
     "Publication Years Breakdown": {
       "2026": 21
     },
-    "Validated At UTC": "2026-11-12T11:58:39.734564+00:00"
+    "Validated At UTC": "2026-11-12T12:03:01.653998+00:00"
   },
   "history_runs_count": 2
 }
