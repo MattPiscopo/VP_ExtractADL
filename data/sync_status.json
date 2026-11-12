@@ -1,0 +1,54 @@
+{
+  "sync_log": {
+    "Run ID": "RUN-20261112-115837",
+    "Run timestamp": "2026-11-12T11:58:37.186153+00:00",
+    "Execution environment": "Local (Windows 11)",
+    "Execution mode": "update",
+    "Pages requested": 3,
+    "Pages successfully processed": 3,
+    "API-reported publication count": 1953,
+    "Records retrieved": 30,
+    "Unique records": 30,
+    "New records": 20,
+    "Updated records": 0,
+    "Errors": "None",
+    "Coverage status": "Partial / Incomplete",
+    "Execution result": "SUCCESS"
+  },
+  "qa_metrics": {
+    "Total unique publications": 30,
+    "API-reported publication count": 1953,
+    "API-reported pages": 196,
+    "Pages processed": 3,
+    "Discrepancy (Actual - Expected)": -1923,
+    "Duplicate IDs": 0,
+    "Missing titles": 0,
+    "Missing publication dates": 0,
+    "Missing URLs": 0,
+    "Invalid URLs": 0,
+    "Industry classification coverage (%)": 73.33,
+    "ENUR classification coverage (%)": 40.0,
+    "Direct ENUR count": 3,
+    "Cross-practice ENUR count": 9,
+    "Other / Non-ENUR count": 18,
+    "Active records": 30,
+    "Not observed records": 0,
+    "Quality Complete": 21,
+    "Quality Partial": 0,
+    "Quality Review": 9,
+    "Coverage complete": false,
+    "Errors": "None",
+    "Publication Types Breakdown": {
+      "Insights - Viewpoints": 23,
+      "Reports": 3,
+      "Blue Shift Report": 1,
+      "Insights - Hubspot": 1,
+      "Insights - Reports": 2
+    },
+    "Publication Years Breakdown": {
+      "2026": 21
+    },
+    "Validated At UTC": "2026-11-12T11:58:39.734564+00:00"
+  },
+  "history_runs_count": 2
+}

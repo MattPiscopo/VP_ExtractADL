@@ -1,0 +1,36 @@
+# ADL Insights Archive Configuration
+api:
+  base_url: "https://www.adlittle.com/en/insights_rest"
+  default_types:
+    - "reports"
+    - "viewpoints"
+    - "in_the_press"
+    - "book"
+    - "blue_shift_report"
+    - "insights_hubspot"
+  headers:
+    User-Agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+    Accept: "application/json, text/plain, */*"
+    Accept-Language: "en-US,en;q=0.9"
+  request_timeout: 25
+  max_retries: 4
+  retry_backoff_factor: 1.5
+  default_delay_seconds: 0.75
+
+pagination:
+  zero_indexed: true
+  items_per_page: 10
+  incremental_pages: 3 # Checks first 3 pages (pages 0, 1, 2) during --update
+
+paths:
+  data_dir: "data"
+  samples_dir: "samples"
+  excel_file: "ADL_Insights_Database.xlsx"
+  master_csv: "publications_master.csv"
+  master_json: "publications_master.json"
+  enur_csv: "publications_enur.csv"
+  topics_csv: "publication_topics.csv"
+  status_json: "sync_status.json"
+  legacy_csv: "ADL_Insights_Database.csv"
+  legacy_status: "coverage.json"
+

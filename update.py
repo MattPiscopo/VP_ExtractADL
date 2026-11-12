@@ -1,108 +1,319 @@
 #!/usr/bin/env python3
-"""Public ADL Insights catalogue archive. Run with --backfill or --update."""
-import argparse, csv, datetime as dt, html, json, logging, os, random, re, time
+"""
+ADL Insights Historical Database & Automated Synchronization CLI.
+Main entry point for backfill, incremental update, offline import, and QA validation.
+"""
+import argparse
+import csv
+import datetime as dt
+import json
+import logging
+import os
+import platform
+import sys
+import time
 from pathlib import Path
-from urllib.parse import urlencode, urljoin
-import requests
-from bs4 import BeautifulSoup
-from openpyxl import Workbook
-from openpyxl.styles import Font, PatternFill, Alignment
-from openpyxl.worksheet.table import Table, TableStyleInfo
+from typing import Any, Dict, List, Optional
 
-BASE='https://www.adlittle.com/en/insights_rest'
-TYPES=['reports','viewpoints','in_the_press','book','blue_shift_report','insights_hubspot']
-HEAD=['Drupal NID','Title','Subtitle','Publication period','Created timestamp','Content type','Industries','Capabilities','Challenges','Excerpt','URL','ENUR relevance','First seen','Last seen','Source API page']
+import yaml
 
-def clean(s): return BeautifulSoup(html.unescape(str(s or '')),'html.parser').get_text(' ',strip=True)
-def classify(x):
-    ind=clean(x.get('industries',''))
-    text=' '.join(clean(x.get(k,'')) for k in ['title','subtitle','body','services','challenges']).lower()
-    if 'energy, utilities' in ind: return 'Direct ENUR'
-    if re.search(r'energy|electric|hydrogen|decarbon|climat|water|grid|nuclear|mining|chemical|utility|renewable|carbon|battery|industrial',text):return 'Cross-sector review'
-    return 'Other / review'
-def normalize(x,page,old=None):
-    nid=str(x.get('nid','')).strip()
-    if not nid: return None
-    stamp=dt.datetime.now(dt.timezone.utc).date().isoformat()
-    parsed=BeautifulSoup(x.get('created','') or '', 'html.parser').find('time')
-    return {'Drupal NID':nid,'Title':clean(x.get('title')),'Subtitle':clean(x.get('subtitle')),
-    'Publication period':clean(x.get('field_date_publication')),'Created timestamp':parsed.get('datetime','') if parsed else '',
-    'Content type':clean(x.get('field_insight_type') or x.get('type')),'Industries':clean(x.get('industries')),
-    'Capabilities':clean(x.get('services')),'Challenges':clean(x.get('challenges')),'Excerpt':clean(x.get('body')),
-    'URL':urljoin('https://www.adlittle.com',x.get('node_url') or x.get('node_url_old') or ''),
-    'ENUR relevance':classify(x),'First seen':(old or {}).get('First seen',stamp),'Last seen':stamp,'Source API page':page}
-def get_page(session,page,attempts=3):
-    params=[('type[]',x) for x in TYPES]+[('page',page)]
-    for attempt in range(attempts):
+# Ensure project root is on sys.path
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from src.collect import build_session, fetch_api_page, load_offline_json
+from src.export import export_all
+from src.merge import merge_records, normalize_legacy_dict
+from src.normalize import normalize_record
+from src.parse import parse_pager, parse_raw_record
+from src.validate import compute_quality_metrics
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+
+
+def load_config(config_path: Path) -> Dict[str, Any]:
+    """Load configuration from YAML file or return defaults."""
+    if config_path.exists():
         try:
-            r=session.get(BASE,params=params,timeout=25)
-            if r.status_code in (403,429):raise RuntimeError(f'Access blocked or rate limited: HTTP {r.status_code}')
-            r.raise_for_status();obj=r.json()
-            if not isinstance(obj.get('results'),list) or not isinstance(obj.get('pager'),dict):raise ValueError('Unexpected JSON schema')
-            return obj
-        except (requests.RequestException,ValueError) as e:
-            if attempt==attempts-1:raise
-            time.sleep(2**attempt+random.uniform(0,1))
+            with open(config_path, "r", encoding="utf-8") as f:
+                return yaml.safe_load(f) or {}
+        except Exception as e:
+            logging.warning("Could not parse %s: %s. Using default settings.", config_path, e)
+    return {}
 
-def write_outputs(folder,rows,status):
-    folder.mkdir(parents=True,exist_ok=True)
-    ordered=sorted(rows.values(),key=lambda x:(x['Publication period'],x['Drupal NID']),reverse=True)
-    with (folder/'ADL_Insights_Database.csv').open('w',encoding='utf-8-sig',newline='') as f:
-        writer=csv.DictWriter(f,fieldnames=HEAD);writer.writeheader();writer.writerows(ordered)
-    wb=Workbook();ws=wb.active;ws.title='Publications';ws.append(HEAD)
-    for row in ordered:ws.append([row.get(k,'') for k in HEAD])
-    ws.freeze_panes='C2';ws.sheet_view.showGridLines=False;ws.auto_filter.ref=f'A1:O{max(1,ws.max_row)}'
-    widths=[15,54,54,21,27,25,35,27,25,85,70,23,17,17,17]
-    for i,w in enumerate(widths,1):ws.column_dimensions[__import__('openpyxl').utils.get_column_letter(i)].width=w
-    for c in ws[1]:c.fill=PatternFill('solid',fgColor='193454');c.font=Font(color='FFFFFF',bold=True);c.alignment=Alignment(wrap_text=True)
-    ws.row_dimensions[1].height=32
-    for row in ws.iter_rows(min_row=2):
-        for c in row:c.alignment=Alignment(vertical='top');c.font=Font(color='00805D',size=10)
-        if row[10].value:row[10].hyperlink=row[10].value;row[10].font=Font(color='0563C1',underline='single')
-        row[11].fill=PatternFill('solid',fgColor='DFF2E8' if row[11].value=='Direct ENUR' else 'FFF0D8' if row[11].value=='Cross-sector review' else 'F1F3F5')
-    summary=wb.create_sheet('Coverage & QA');summary.sheet_view.showGridLines=False
-    for k,v in status.items():summary.append([k,v])
-    summary.column_dimensions['A'].width=36;summary.column_dimensions['B'].width=95
-    for c in summary[1]:c.fill=PatternFill('solid',fgColor='193454');c.font=Font(color='FFFFFF',bold=True)
-    wb.save(folder/'ADL_Insights_Database.xlsx')
-    (folder/'coverage.json').write_text(json.dumps(status,indent=2,ensure_ascii=False),encoding='utf-8')
+
+def load_existing_records(data_dir: Path) -> Dict[str, Dict[str, Any]]:
+    """Load existing records from master files or legacy CSV."""
+    records: Dict[str, Dict[str, Any]] = {}
+    master_json = data_dir / "publications_master.json"
+    master_csv = data_dir / "publications_master.csv"
+    legacy_csv = data_dir / "ADL_Insights_Database.csv"
+
+    if master_json.exists():
+        try:
+            with open(master_json, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                for item in data:
+                    pub_id = str(item.get("Publication ID", "")).strip()
+                    if pub_id:
+                        records[pub_id] = item
+            logging.info("Loaded %d existing records from %s", len(records), master_json.name)
+            return records
+        except Exception as e:
+            logging.warning("Failed to load %s: %s", master_json, e)
+
+    csv_to_read = master_csv if master_csv.exists() else (legacy_csv if legacy_csv.exists() else None)
+    if csv_to_read and csv_to_read.exists():
+        try:
+            with open(csv_to_read, "r", encoding="utf-8-sig", newline="") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    normalized_row = normalize_legacy_dict(row)
+                    pub_id = str(normalized_row.get("Publication ID", "")).strip()
+                    if pub_id:
+                        records[pub_id] = normalized_row
+            logging.info("Loaded %d existing records from %s", len(records), csv_to_read.name)
+        except Exception as e:
+            logging.warning("Failed to load %s: %s", csv_to_read, e)
+
+    return records
+
+
+def load_update_log_history(data_dir: Path) -> List[Dict[str, Any]]:
+    """Load past execution logs from sync_status.json if present."""
+    status_file = data_dir / "sync_status.json"
+    history = []
+    if status_file.exists():
+        try:
+            with open(status_file, "r", encoding="utf-8") as f:
+                st = json.load(f)
+                if "sync_log" in st:
+                    history.append(st["sync_log"])
+        except Exception:
+            pass
+    return history
+
 
 def main():
-    ap=argparse.ArgumentParser();g=ap.add_mutually_exclusive_group(required=True)
-    g.add_argument('--backfill',action='store_true');g.add_argument('--update',action='store_true');g.add_argument('--import-json',type=Path)
-    ap.add_argument('--output-dir',type=Path,default=Path('data'));ap.add_argument('--max-pages',type=int,default=300)
-    ap.add_argument('--delay',type=float,default=1.5);args=ap.parse_args()
-    folder=args.output_dir;rows={};prior=folder/'ADL_Insights_Database.csv'
-    if prior.exists():
-        with prior.open(encoding='utf-8-sig',newline='') as f:rows={r['Drupal NID']:r for r in csv.DictReader(f)}
-    seen=set();count=0;expected=None;pages=None;complete=False;errors=[]
-    session=requests.Session();session.headers.update({'User-Agent':'ADL-Insights-Internal-Archive/1.0 (respectful catalogue polling)','Accept':'application/json'})
-    try:
-        for page in range(1,args.max_pages+1):
-            if args.import_json:
-                if page>1:break
-                obj=json.loads(args.import_json.read_text(encoding='utf-8-sig'))
-            else:obj=get_page(session,page)
-            pager=obj['pager'];expected=pager.get('count',expected);pages=pager.get('pages',pages)
-            results=obj['results'];count+=1
-            for x in results:
-                n=normalize(x,page,rows.get(str(x.get('nid',''))))
-                if n:rows[n['Drupal NID']]=n;seen.add(n['Drupal NID'])
-            print(f'Page {page}/{pages or "?"}: {len(results)} items, total unique {len(rows)}',flush=True)
-            if args.import_json:break
-            if page>=int(pages or 0) or not results:complete=True;break
-            if args.update and page>=2:break # new items may span 2 pages; full backfill for deep reconciliation
-            time.sleep(max(args.delay,0.5))
-    except Exception as e:
-        errors.append(str(e));logging.error('Collection interrupted: %s',e)
-    status={'Run UTC':dt.datetime.now(dt.timezone.utc).isoformat(),'Mode':'import-json' if args.import_json else ('backfill' if args.backfill else 'update'),
-            'Unique records in archive':len(rows),'Records seen this run':len(seen),'Pages processed':count,
-            'API reported count':expected,'API reported pages':pages,'Full pagination completed this run':complete,
-            'Coverage complete': bool(complete and expected is not None and len(seen)>=int(expected)),
-            'Errors':'; '.join(errors) if errors else 'None',
-            'Method':'Public metadata catalogue; no article full text; nid deduplication; ENUR relevance heuristic requires review',
-            'Note':'Update checks first 2 pages only; schedule periodic backfill to reconcile older/edited entries.'}
-    write_outputs(folder,rows,status)
-    print(json.dumps(status,indent=2))
-    if errors:raise SystemExit(1)
-if __name__=='__main__':main()
+    parser = argparse.ArgumentParser(
+        description="ADL Insights Publication Database ETL & Synchronization"
+    )
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--backfill", action="store_true", help="Execute complete historical catalogue backfill")
+    group.add_argument("--update", action="store_true", help="Execute incremental update (freshest pages)")
+    group.add_argument("--validate", action="store_true", help="Validate existing database without network crawl")
+    group.add_argument("--import-json", type=Path, help="Import offline JSON file or directory of JSON files")
+
+    parser.add_argument("--output-dir", type=Path, default=Path("data"), help="Directory for output files")
+    parser.add_argument("--config", type=Path, default=Path("config.yaml"), help="Path to config.yaml")
+    parser.add_argument("--max-pages", type=int, default=None, help="Maximum number of pages to process")
+    parser.add_argument("--delay", type=float, default=None, help="Delay between requests in seconds")
+
+    args = parser.parse_args()
+
+    cfg = load_config(args.config)
+    api_cfg = cfg.get("api", {})
+    pagination_cfg = cfg.get("pagination", {})
+
+    output_dir: Path = args.output_dir
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    delay_sec = args.delay if args.delay is not None else float(api_cfg.get("default_delay_seconds", 0.75))
+    base_url = api_cfg.get("base_url", "https://www.adlittle.com/en/insights_rest")
+    default_types = api_cfg.get("default_types", None)
+
+    # Determine execution environment
+    is_gha = os.getenv("GITHUB_ACTIONS") == "true"
+    env_name = "GitHub Actions" if is_gha else f"Local ({platform.system()} {platform.release()})"
+
+    run_ts = dt.datetime.now(dt.timezone.utc).isoformat()
+    run_id = f"RUN-{dt.datetime.now(dt.timezone.utc).strftime('%Y%m%d-%H%M%S')}"
+    mode_name = (
+        "validate" if args.validate
+        else ("import-json" if args.import_json
+              else ("backfill" if args.backfill else "update"))
+    )
+
+    logging.info("==================================================")
+    logging.info("Starting ADL Insights ETL | Run ID: %s", run_id)
+    logging.info("Mode: %s | Environment: %s | Output: %s", mode_name, env_name, output_dir)
+    logging.info("==================================================")
+
+    # 1. Load prior records and history
+    prior_records = load_existing_records(output_dir)
+    history_logs = load_update_log_history(output_dir)
+
+    fresh_records: Dict[str, Dict[str, Any]] = {}
+    pages_processed = 0
+    pages_requested = 0
+    api_count: Optional[int] = None
+    api_pages: Optional[int] = None
+    run_errors: List[str] = []
+    exec_result = "SUCCESS"
+
+    if args.validate:
+        logging.info("Running validation mode across %d existing records...", len(prior_records))
+        merged_records = prior_records
+        new_count = 0
+        updated_count = 0
+    elif args.import_json:
+        logging.info("Importing offline JSON from %s...", args.import_json)
+        try:
+            offline_pages = load_offline_json(args.import_json)
+            pages_requested = len(offline_pages)
+            for page_idx, page_data in enumerate(offline_pages):
+                pager = parse_pager(page_data.get("pager", {}))
+                api_count = pager["count"] or api_count
+                api_pages = pager["pages"] or api_pages
+                results = page_data.get("results", [])
+                pages_processed += 1
+                for raw_item in results:
+                    parsed = parse_raw_record(raw_item, page_num=page_idx)
+                    nid = parsed["nid"]
+                    if nid:
+                        norm = normalize_record(parsed, prior_records.get(nid))
+                        fresh_records[nid] = norm
+            logging.info("Processed %d offline page(s), collected %d records.", pages_processed, len(fresh_records))
+            merged_records, new_count, updated_count = merge_records(
+                prior_records, fresh_records, is_full_backfill=False
+            )
+        except Exception as e:
+            logging.error("Offline import failed: %s", e)
+            run_errors.append(str(e))
+            exec_result = "FAILED"
+            merged_records = prior_records
+            new_count = 0
+            updated_count = 0
+    else:
+        # Network collection mode (backfill or update)
+        session = build_session()
+        # Probe first page (page 0 in Drupal 0-indexed pager)
+        first_page_idx = 0
+        try:
+            logging.info("Fetching initial page %d to inspect catalogue pager...", first_page_idx)
+            first_data = fetch_api_page(session, first_page_idx, base_url=base_url, types=default_types)
+            pages_requested += 1
+            pager = parse_pager(first_data.get("pager", {}))
+            api_count = pager["count"]
+            api_pages = pager["pages"]
+            logging.info(
+                "API Pager: Total publications=%d, Total pages=%d, Items/page=%d",
+                api_count, api_pages, pager["items_per_page"]
+            )
+
+            results = first_data.get("results", [])
+            pages_processed += 1
+            for raw_item in results:
+                parsed = parse_raw_record(raw_item, page_num=first_page_idx)
+                nid = parsed["nid"]
+                if nid:
+                    norm = normalize_record(parsed, prior_records.get(nid))
+                    fresh_records[nid] = norm
+
+            # Determine page range to process
+            if args.backfill:
+                target_total_pages = api_pages if api_pages else 196
+                if args.max_pages:
+                    target_total_pages = min(target_total_pages, args.max_pages)
+                pages_to_fetch = list(range(1, target_total_pages))
+                logging.info("Backfill mode: Queuing %d remaining pages (pages 1 to %d)...", len(pages_to_fetch), target_total_pages - 1)
+            else:
+                # Update mode: check newest pages (e.g. pages 1, 2)
+                incremental_page_count = int(pagination_cfg.get("incremental_pages", 3))
+                max_update_page = min(incremental_page_count, api_pages or 3)
+                pages_to_fetch = list(range(1, max_update_page))
+                logging.info("Incremental update mode: Queuing pages %s...", pages_to_fetch)
+
+            for page_idx in pages_to_fetch:
+                pages_requested += 1
+                time.sleep(max(delay_sec, 0.2))
+                logging.info("Fetching page %d/%d (collected so far: %d)...", page_idx, (api_pages or target_total_pages) - 1, len(fresh_records))
+                page_data = fetch_api_page(session, page_idx, base_url=base_url, types=default_types)
+                pages_processed += 1
+                items = page_data.get("results", [])
+                if not items:
+                    logging.info("Empty results encountered on page %d; stopping pagination.", page_idx)
+                    break
+                for raw_item in items:
+                    parsed = parse_raw_record(raw_item, page_num=page_idx)
+                    nid = parsed["nid"]
+                    if nid:
+                        norm = normalize_record(parsed, prior_records.get(nid))
+                        fresh_records[nid] = norm
+
+            logging.info("Collection finished. Successfully retrieved %d records across %d pages.", len(fresh_records), pages_processed)
+            is_full = bool(args.backfill and pages_processed >= (api_pages or 196))
+            merged_records, new_count, updated_count = merge_records(
+                prior_records, fresh_records, is_full_backfill=is_full
+            )
+            exec_result = "SUCCESS" if not run_errors else "PARTIAL"
+
+        except Exception as e:
+            logging.error("Collection interrupted: %s", e)
+            run_errors.append(str(e))
+            exec_result = "FAILED"
+            # Never destroy or empty existing archive on error!
+            if fresh_records:
+                logging.warning("Preserving partial collection of %d records.", len(fresh_records))
+                merged_records, new_count, updated_count = merge_records(
+                    prior_records, fresh_records, is_full_backfill=False
+                )
+            else:
+                logging.warning("No records collected this run. Preserving previous archive.")
+                merged_records = prior_records
+                new_count = 0
+                updated_count = 0
+
+    # Compute validation & quality metrics
+    qa_metrics = compute_quality_metrics(
+        records=merged_records,
+        api_expected_count=api_count,
+        api_expected_pages=api_pages,
+        pages_processed=pages_processed,
+        run_errors=run_errors,
+    )
+
+    sync_log = {
+        "Run ID": run_id,
+        "Run timestamp": run_ts,
+        "Execution environment": env_name,
+        "Execution mode": mode_name,
+        "Pages requested": pages_requested,
+        "Pages successfully processed": pages_processed,
+        "API-reported publication count": api_count if api_count is not None else "N/A",
+        "Records retrieved": len(fresh_records),
+        "Unique records": len(merged_records),
+        "New records": new_count,
+        "Updated records": updated_count,
+        "Errors": "; ".join(run_errors) if run_errors else "None",
+        "Coverage status": "Complete" if qa_metrics.get("Coverage complete") else "Partial / Incomplete",
+        "Execution result": exec_result,
+    }
+
+    # Export all outputs
+    export_all(
+        output_dir=output_dir,
+        records=merged_records,
+        sync_log=sync_log,
+        qa_metrics=qa_metrics,
+        all_logs_history=history_logs,
+    )
+
+    logging.info("==================================================")
+    logging.info("ETL Run Finished. Status Summary:")
+    logging.info(json.dumps(sync_log, indent=2))
+    logging.info("Data Quality & Coverage Summary:")
+    logging.info(json.dumps({k: v for k, v in qa_metrics.items() if not isinstance(v, dict)}, indent=2))
+    logging.info("==================================================")
+
+    if run_errors and exec_result == "FAILED":
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
